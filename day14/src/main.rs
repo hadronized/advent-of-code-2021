@@ -31,27 +31,24 @@ fn solve12(input: &str, steps: usize) -> u64 {
     *pairs.entry(p).or_default() += 1;
   }
 
-  let mut pairs2 = [pairs.clone(), pairs];
+  let mut pairs_target = pairs.clone();
 
   for _ in 0..steps {
-    let &mut [ref current_pair, ref mut target_pair] = &mut pairs2;
-
-    for (pair, count) in current_pair.iter().filter(|(_, &count)| count > 0) {
-      *target_pair.entry(*pair).or_insert(*count) -= *count;
+    for (pair, count) in pairs.iter().filter(|(_, &count)| count > 0) {
+      *pairs_target.entry(*pair).or_insert(*count) -= *count;
 
       let p = rules.get(pair).expect("unknown rule pair");
       let a = [pair[0], *p];
       let b = [*p, pair[1]];
-      *target_pair.entry(a).or_default() += count;
-      *target_pair.entry(b).or_default() += count;
+      *pairs_target.entry(a).or_default() += count;
+      *pairs_target.entry(b).or_default() += count;
     }
 
-    pairs2.swap(0, 1);
+    pairs = pairs_target.clone();
   }
 
   let mut freqs = HashMap::<char, i64>::new();
-  for (pair, count) in &pairs2[0] {
-    // FIXME: this is wrong and I can’t wrap my head around about why
+  for (pair, count) in pairs {
     *freqs.entry(pair[0]).or_default() += count / 2;
     *freqs.entry(pair[1]).or_default() += count / 2;
   }
