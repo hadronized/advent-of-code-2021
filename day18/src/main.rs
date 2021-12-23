@@ -1,6 +1,6 @@
-#![feature(box_patterns)]
+// fuck this puzzle, I’m out.
 
-use std::ops::Add;
+use std::{cell::RefCell, rc::Rc};
 
 use nom::{
   branch::alt,
@@ -11,68 +11,142 @@ use nom::{
   IResult,
 };
 
+type PZ = Rc<RefCell<Zipper>>;
+
 #[derive(Debug)]
-enum Snailfish {
-  Pair(Box<Snailfish>, Box<Snailfish>),
+enum ZipperContent {
   Number(u32),
+  Pair { left: PZ, right: PZ },
 }
 
-impl Snailfish {
-  fn reduce(mut self) -> Self {
+#[derive(Debug)]
+struct Zipper {
+  parent: Option<PZ>,
+  content: ZipperContent,
+}
+
+impl Zipper {
+  fn depth(&self) -> usize {
+    1 + self
+      .parent
+      .as_ref()
+      .map(|p| p.borrow().depth())
+      .unwrap_or(0)
+  }
+
+  fn reduce(zipper: &PZ) {
     loop {
-      let (reduced, changed) = self.do_reduction(1, None);
-
-      self = reduced;
-      if !changed {
-        break self;
+      if !(Self::explode(zipper) || Self::split(zipper)) {
+        break;
       }
     }
   }
 
-  fn do_reduction(self, depth: usize, left_parent: &Option<u32>) -> (Self, bool) {
-    match self {
-      Snailfish::Pair(a, b) if depth == 4 => (
-        Snailfish::Pair(Box::new(a.explode(left_parent, &b)), b),
-        true,
-      ),
-      Snailfish::Pair(box Snailfish::Number(n), b) if n >= 10 => {
-        (Snailfish::Pair(Box::new(Self::split(n)), b), true)
+  fn split(zipper: &PZ) -> bool {
+    match zipper.borrow().content {
+      ZipperContent::Number(n) if n >= 10 => {
+        let n2 = n as f32 * 0.5;
+
+        let content_left = ZipperContent::Number(n2.round() as _);
+        let left = Rc::new(RefCell::new(Zipper {
+          parent: Some(zipper.clone()),
+          content: content_left,
+        }));
+
+        let content_right = ZipperContent::Number(n2.ceil() as _);
+        let right = Rc::new(RefCell::new(Zipper {
+          parent: Some(zipper.clone()),
+          content: content_right,
+        }));
+
+        zipper.borrow_mut().content = ZipperContent::Pair { left, right };
+        true
       }
 
-      Snailfish::Pair(a, b) => {
-        let depth = depth + 1;
-        let (a, ab) = a.do_reduction(depth, left_parent);
-        let (b, bb) = b.do_reduction(depth, &a);
-        (Snailfish::Pair(Box::new(a), Box::new(b)), ab || bb)
-      }
-
-      _ => (self, false),
+      _ => false,
     }
   }
 
-  fn explode(self) -> Self {
-    self
-  }
+  fn explode(zipper: &PZ) -> bool {
+    match zipper.borrow().content {
+      ZipperContent::Pair {
+        ref left,
+        ref right,
+      } => {
+        match (left.borrow().content, right.borrow().content) {
+          (ZipperContent::Number(left), ZipperContent::Number(right))
+            if zipper.borrow().depth() == 4 =>
+          {
+            // here, we first replace the current zipper, so that we can go up and replace Pair only
+            zipper.borrow_mut().content = ZipperContent::Number(0);
 
-  fn split(n: u32) -> Self {
-    let n2 = n as f32 * 0.5;
-    let a = Snailfish::Number(n2.round() as _);
-    let b = Snailfish::Number(n2.ceil() as _);
-    Snailfish::Pair(Box::new(a), Box::new(b))
+            // first find left
+            let mut current = zipper.clone();
+            while let Some(parent) = current.borrow().parent {
+              if let ZipperContent::Pair { right, .. } = parent.borrow().content {
+                if let ZipperContent::Pair { .. } = right.borrow().content {
+                  current = parent;
+                  break;
+                }
+              }
+
+              current = parent;
+            }
+
+            // go down until we reach the number
+            loop {
+              match current.borrow_mut().content {
+                ZipperContent::Number(n) => {
+                  n = left;
+                  break;
+                }
+
+                ZipperContent::Pair { right, .. } => current = right.clone(),
+              }
+            }
+
+            // same shit with right
+            current = zipper.clone();
+            while let Some(parent) = current.borrow().parent {
+              if let ZipperContent::Pair { left, .. } = parent.borrow().content {
+                if let ZipperContent::Pair { .. } = left.borrow().content {
+                  current = parent;
+                  break;
+                }
+              }
+
+              current = parent;
+            }
+
+            loop {
+              match current.borrow_mut().content {
+                ZipperContent::Number(n) => {
+                  n = right;
+                  break;
+                }
+
+                ZipperContent::Pair { left, .. } => current = left.clone(),
+              }
+            }
+
+            true
+          }
+
+          _ => Self::split(left) && Self::split(right),
+        }
+      }
+
+      _ => false,
+    }
   }
 }
 
-impl Add for Snailfish {
-  type Output = Snailfish;
-
-  fn add(self, rhs: Self) -> Self::Output {
-    Snailfish::Pair(Box::new(self), Box::new(rhs))
-  }
-}
-
-fn parse_the_fucking_snailfish(input: &str) -> IResult<&str, Snailfish> {
+fn parse_the_fucking_snailfish(input: &str) -> IResult<&str, Zipper> {
   alt((
-    map(digit1, |s: &str| Snailfish::Number(s.parse().unwrap())),
+    map(digit1, |s: &str| Zipper {
+      parent: None,
+      content: ZipperContent::Number(s.parse().unwrap()),
+    }),
     delimited(
       tag("["),
       map(
@@ -81,7 +155,13 @@ fn parse_the_fucking_snailfish(input: &str) -> IResult<&str, Snailfish> {
           tag(","),
           parse_the_fucking_snailfish,
         ),
-        |(a, b)| Snailfish::Pair(Box::new(a), Box::new(b)),
+        |(a, b)| Zipper {
+          parent: None,
+          content: ZipperContent::Pair {
+            left: Rc::new(RefCell::new(a)),
+            right: Rc::new(RefCell::new(b)),
+          },
+        },
       ),
       tag("]"),
     ),
